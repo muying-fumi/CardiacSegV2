@@ -34,6 +34,8 @@ from runners.inferer import run_infering
 from networks.network import network
 from optimizers.optimizer import Optimizer, LR_Scheduler
 
+sys.path.append(os.path.abspath(os.path.dirname(__file__) + "/.."))
+sys.path.insert(0, ".")
 
 def main(config, args=None):
     if args.tune_mode == 'transform':
@@ -263,10 +265,14 @@ def main_worker(args):
         pids = get_pids_by_data_dicts(test_dicts)
         inf_dc_vals = []
         inf_hd95_vals = []
+        inf_assd_vals = []
+        inf_surfdice_vals = []
         inf_sensitivity_vals = []
         inf_specificity_vals = []
         tt_dc_vals = []
         tt_hd95_vals = []
+        tt_assd_vals = []
+        tt_surfdice_vals = []
         inf_times = []
         for data_dict in test_dicts:
             print('infer data:', data_dict)
@@ -282,8 +288,12 @@ def main_worker(args):
             )
             tt_dc_vals.append(ret_dict['tta_dc'])
             tt_hd95_vals.append(ret_dict['tta_hd'])
+            tt_assd_vals.append(ret_dict['tta_assd'])
+            tt_surfdice_vals.append(ret_dict['tta_surfdice'])
             inf_dc_vals.append(ret_dict['ori_dc'])
             inf_hd95_vals.append(ret_dict['ori_hd'])
+            inf_assd_vals.append(ret_dict['ori_assd'])
+            inf_surfdice_vals.append(ret_dict['ori_surfdice'])
             inf_sensitivity_vals.append(ret_dict['ori_sensitivity'])
             inf_specificity_vals.append(ret_dict['ori_specificity'])
             inf_times.append(ret_dict['inf_time'])
@@ -299,6 +309,14 @@ def main_worker(args):
             tt_hd95_vals,
             columns=[f'tt_hd95{n}' for n in label_names]
         )
+        eval_tt_assd_val_df = pd.DataFrame(
+            tt_assd_vals,
+            columns=[f'tt_assd{n}' for n in label_names]
+        )
+        eval_tt_surfdice_val_df = pd.DataFrame(
+            tt_surfdice_vals,
+            columns=[f'tt_surfdice{n}' for n in label_names]
+        )
         
         
         eval_inf_dice_val_df = pd.DataFrame(
@@ -308,6 +326,14 @@ def main_worker(args):
         eval_inf_hd95_val_df = pd.DataFrame(
             inf_hd95_vals,
             columns=[f'inf_hd95{n}' for n in label_names]
+        )
+        eval_inf_assd_val_df = pd.DataFrame(
+            inf_assd_vals,
+            columns=[f'inf_assd{n}' for n in label_names]
+        )
+        eval_inf_surfdice_val_df = pd.DataFrame(
+            inf_surfdice_vals,
+            columns=[f'inf_surfdice{n}' for n in label_names]
         )
         eval_inf_sensitivity_val_df = pd.DataFrame(
             inf_sensitivity_vals,
@@ -330,15 +356,19 @@ def main_worker(args):
         
         avg_tt_dice = eval_tt_dice_val_df.T.mean().mean()
         avg_tt_hd95 =  eval_tt_hd95_val_df.T.mean().mean()
+        avg_tt_assd =  eval_tt_assd_val_df.T.mean().mean()
+        avg_tt_surfdice =  eval_tt_surfdice_val_df.T.mean().mean()
         avg_inf_dice = eval_inf_dice_val_df.T.mean().mean()
         avg_inf_hd95 =  eval_inf_hd95_val_df.T.mean().mean()
+        avg_inf_assd =  eval_inf_assd_val_df.T.mean().mean()
+        avg_inf_surfdice =  eval_inf_surfdice_val_df.T.mean().mean()
         avg_inf_sensitivity =  eval_inf_sensitivity_val_df.T.mean().mean()
         avg_inf_specificity =  eval_inf_specificity_val_df.T.mean().mean()
         avg_inf_time = eval_inf_time_df.T.mean().mean()
 
         eval_df = pd.concat([
-            pid_df, eval_tt_dice_val_df, eval_tt_hd95_val_df,
-            eval_inf_dice_val_df, eval_inf_hd95_val_df,
+            pid_df, eval_tt_dice_val_df, eval_tt_hd95_val_df, eval_tt_assd_val_df, eval_tt_surfdice_val_df,
+            eval_inf_dice_val_df, eval_inf_hd95_val_df, eval_inf_assd_val_df, eval_inf_surfdice_val_df,
             eval_inf_sensitivity_val_df, eval_inf_specificity_val_df,eval_inf_time_df
         ], axis=1, join='inner').reset_index(drop=True)
         
@@ -348,8 +378,12 @@ def main_worker(args):
         print("\neval result:")
         print('avg tt dice:', avg_tt_dice)
         print('avg tt hd95:', avg_tt_hd95)
+        print('avg tt assd:', avg_tt_assd)
+        print('avg tt surface dice:', avg_tt_surfdice)
         print('avg inf dice:', avg_inf_dice)
         print('avg inf hd95:', avg_inf_hd95)
+        print('avg inf assd:', avg_inf_assd)
+        print('avg inf surface dice:', avg_inf_surfdice)
         print('avg inf sensitivity:', avg_inf_sensitivity)
         print('avg inf specificity:', avg_inf_specificity)
         print('avg inf time:', avg_inf_time)
@@ -359,8 +393,12 @@ def main_worker(args):
         tune.report(
             tt_dice=avg_tt_dice,
             tt_hd95=avg_tt_hd95,
+            tt_assd=avg_tt_assd,
+            tt_surfdice=avg_tt_surfdice,
             inf_dice=avg_inf_dice,
             inf_hd95=avg_inf_hd95,
+            inf_assd=avg_inf_assd,
+            inf_surfdice=avg_inf_surfdice,
             val_bst_acc=best_acc,
             inf_time=avg_inf_time
         )
@@ -460,8 +498,12 @@ if __name__ == "__main__":
     reporter = CLIReporter(metric_columns=[
         'tt_dice',
         'tt_hd95',
+        'tt_assd',
+        'tt_surfdice',
         'inf_dice',
         'inf_hd95',
+        'inf_assd',
+        'inf_surfdice',
         'val_bst_acc',
         'esc',
         'inf_time',
@@ -490,6 +532,7 @@ if __name__ == "__main__":
         else:
             result = restored_tuner.fit()
     else:
+        ray.init(ignore_reinit_error=True, include_dashboard=False) #
         tuner = tune.Tuner(
             trainable_with_cpu_gpu,
             param_space=search_space,
