@@ -20,7 +20,9 @@ from monai.transforms import (
     Spacing,
     SqueezeDim
 )
-from monai.metrics import DiceMetric, HausdorffDistanceMetric, ConfusionMatrixMetric,get_confusion_matrix, compute_confusion_matrix_metric
+from monai.metrics import DiceMetric, HausdorffDistanceMetric, ConfusionMatrixMetric, SurfaceDistanceMetric, get_confusion_matrix, compute_confusion_matrix_metric, compute_average_surface_distance
+
+import surface_distance
 
 from data_utils.io import save_img
 import matplotlib.pyplot as plt
@@ -45,6 +47,17 @@ def check_channel(inp):
         inp = add_ch(inp)
     return inp
 
+def compute_surface_dice(pred, label, spacing, threshold_mm=1.0):
+    pred_np = pred.cpu().numpy().astype(np.bool_)
+    label_np = label.cpu().numpy().astype(np.bool_)
+    spacing = np.array(spacing)
+
+    surface_distances = surface_distance.compute_surface_distances(
+        label_np, pred_np, spacing)
+
+    return surface_distance.compute_surface_dice_at_tolerance(
+        surface_distances, threshold_mm)
+
 
 def eval_label_pred(data, cls_num, device):
     # post transform
@@ -62,6 +75,11 @@ def eval_label_pred(data, cls_num, device):
         percentile=95,
         reduction="mean",
         get_not_nans=False
+    )
+
+    assd_metric = SurfaceDistanceMetric(
+        include_background=False,
+        symmetric=True
     )
     
     confusion_metric = ConfusionMatrixMetric(
@@ -89,10 +107,20 @@ def eval_label_pred(data, cls_num, device):
     
     dice_metric(y_pred=val_output_convert, y=val_labels_convert)
     hd95_metric(y_pred=val_output_convert, y=val_labels_convert)
+    assd_metric(y_pred=val_output_convert, y=val_labels_convert)
     confusion_metric(y_pred=val_output_convert, y=val_labels_convert)
 
     dc_vals = dice_metric.get_buffer().detach().cpu().numpy().squeeze()
     hd95_vals = hd95_metric.get_buffer().detach().cpu().numpy().squeeze()
+    assd_vals = assd_metric.get_buffer().detach().cpu().numpy().squeeze()
+
+    # surface dice 計算
+    surface_dice_vals = []
+    spacing = [1.0, 1.0, 1.0]  # or from data['pred_meta_dict'] if spacing info available
+    for p, l in zip(val_pred, val_label):
+        sd = compute_surface_dice(p[0], l[0], spacing=spacing)
+        surface_dice_vals.append(sd)
+    surface_dice_vals = np.mean(surface_dice_vals, axis=0)
     
     confusion_vals = confusion_metric.get_buffer().detach().cpu().numpy().squeeze()
     tp = confusion_vals[0]
@@ -102,8 +130,7 @@ def eval_label_pred(data, cls_num, device):
     sensitivity_vals = tp / (tp + fn)
     specificity_vals = tn / (tn + fp)
     
-    
-    return dc_vals, hd95_vals, sensitivity_vals, specificity_vals
+    return dc_vals, hd95_vals, assd_vals, surface_dice_vals, sensitivity_vals, specificity_vals
 
 
 def get_filename(data):
@@ -141,12 +168,16 @@ def run_infering(
     
     # eval infer tta
     if 'label' in data.keys():
-        tta_dc_vals, tta_hd95_vals, _ , _ = eval_label_pred(data, args.out_channels, args.device)
+        tta_dc_vals, tta_hd95_vals, tta_assd_vals, tta_surfdice_vals, _ , _ = eval_label_pred(data, args.out_channels, args.device)
         print('infer test time aug:')
         print('dice:', tta_dc_vals)
         print('hd95:', tta_hd95_vals)
+        print('assd:', tta_assd_vals)
+        print('surface dice:', tta_surfdice_vals)
         ret_dict['tta_dc'] = tta_dc_vals
         ret_dict['tta_hd'] = tta_hd95_vals
+        ret_dict['tta_assd'] = tta_assd_vals
+        ret_dict['tta_surfdice'] = tta_surfdice_vals
         
         # post label transform 
         sqz_transform = SqueezeDimd(keys=['label'])
@@ -165,14 +196,18 @@ def run_infering(
         data['label'] = lbl_data['label']
         data['label_meta_dict'] = lbl_data['label']
         
-        ori_dc_vals, ori_hd95_vals, ori_sensitivity_vals, ori_specificity_vals = eval_label_pred(data, args.out_channels, args.device)
+        ori_dc_vals, ori_hd95_vals, ori_assd_vals, ori_surfdice_vals, ori_sensitivity_vals, ori_specificity_vals = eval_label_pred(data, args.out_channels, args.device)
         print('infer test original:')
         print('dice:', ori_dc_vals)
         print('hd95:', ori_hd95_vals)
+        print('assd:', ori_assd_vals)
+        print('surface dice:', ori_surfdice_vals)
         print('sensitivity:', ori_sensitivity_vals)
         print('specificity:', ori_specificity_vals)
         ret_dict['ori_dc'] = ori_dc_vals
         ret_dict['ori_hd'] = ori_hd95_vals
+        ret_dict['ori_assd'] = ori_assd_vals
+        ret_dict['ori_surfdice'] = ori_surfdice_vals
         ret_dict['ori_sensitivity'] = ori_sensitivity_vals
         ret_dict['ori_specificity'] = ori_specificity_vals
     
